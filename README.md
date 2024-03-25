@@ -40,6 +40,7 @@
 # To Do
 
 - [x] Create thread for the game
+- [x] Handle messages from LNBits-bot 
+- [ ] Watch blockchain
 - [ ] User database
 - [ ] Implement [halving massacre algorithm](https://github.com/lacrypta/halving-massacre)
-- [ ] Watch blockchain
