@@ -21,7 +21,9 @@ cp .env.example .env
 - Go to [Discord Developers Dashboard](https://discord.com/developers) and create new app.
 - Invite yout bot to your server with that link, remplace YOUR_CLIENT_ID:
 
-    `https://discord.com/oauth2/authorize?client_id=YOUR_CLIENT_ID&permissions=328565197888&scope=bot+applications.commands`
+    ```text
+    https://discord.com/oauth2/authorize?client_id=YOUR_CLIENT_ID&permissions=328565197888&scope=bot+applications.commands
+    ```
 
 3. Deploy commands
 ```bash
