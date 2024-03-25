@@ -1,5 +1,4 @@
 const { SlashCommandBuilder } = require('@discordjs/builders');
-const { startBitcoinServer } = require('../../services/bitcoin');
 
 module.exports = {
     data: new SlashCommandBuilder()
