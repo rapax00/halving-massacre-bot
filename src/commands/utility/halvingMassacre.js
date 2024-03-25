@@ -20,6 +20,18 @@ module.exports = {
                     'Bloque en el cual se cierran las apuestas y comienza el juego!'
                 )
                 .setRequired(true)
+        )
+        .addUserOption((option) =>
+            option
+                .setName('zap-bot')
+                .setDescription('Bot que se va a usar para zapear')
+                .setRequired(true)
+        )
+        .addUserOption((option) =>
+            option
+                .setName('usuario-pozo')
+                .setDescription('Usuario que va a recibir las apuestas')
+                .setRequired(true)
         ),
     async execute(interaction) {
         const intervalo = interaction.options.getNumber('intervalo');
@@ -34,8 +46,9 @@ module.exports = {
             fetchReply: true
         });
 
+        let thread;
         try {
-            const thread = await message.startThread({
+            thread = await message.startThread({
                 name: 'Halving Massacre ' + bloqueInicial,
                 type: ChannelType.PublicThread
             });
@@ -44,5 +57,29 @@ module.exports = {
         } catch (error) {
             console.error(error);
         }
+
+        const client = interaction.client;
+
+        client.on('messageCreate', async (message) => {
+            if (message.channel.id !== thread.id) return;
+
+            const zapBot = interaction.options.getUser('zap-bot');
+            if (message.author.id !== zapBot.id) return;
+
+            const usuarioPozo = interaction.options.getUser('usuario-pozo');
+            const reciverId = message.content
+                .match(/<@(\d+)>/g)[1]
+                .slice(2, -1);
+            if (usuarioPozo.id !== reciverId) return;
+
+            const sender = message.mentions.users.first();
+            const amount = message.content.match(/envió (\d+) satoshis/)[1];
+
+            console.log(
+                'Nueva apuesta recibida\n' +
+                    `de: ${sender.displayName}\n` +
+                    `por: ${amount} sats`
+            );
+        });
     }
 };
