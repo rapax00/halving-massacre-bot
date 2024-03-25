@@ -1,4 +1,5 @@
 const { SlashCommandBuilder } = require('@discordjs/builders');
+const { ChannelType } = require('discord.js');
 
 module.exports = {
     data: new SlashCommandBuilder()
@@ -17,7 +18,7 @@ module.exports = {
             console.log(
                 `Channel: ${channel.id} | Name: ${channel.name} | Type: ${channel.type}`
             );
-            if (channel.type === 0) {
+            if (channel.type === ChannelType.GuildText) {
                 channel.send('Hi :wave: , this is a text channel!');
             }
         });
