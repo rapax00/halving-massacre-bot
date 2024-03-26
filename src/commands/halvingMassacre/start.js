@@ -1,6 +1,13 @@
+/**
+ * TODO:
+ * - add closing bets when next massacre - 2 blocks remain and notify the players
+ * - Fix int for float amount
+ */
+
 const { SlashCommandBuilder } = require('@discordjs/builders');
 const { ChannelType } = require('discord.js');
-const { getLastBlock } = require('../../services/mempool.js');
+const { getLastBlockAndHash } = require('../../services/mempool.js');
+const { halve } = require('./lottery.js');
 
 module.exports = {
     data: new SlashCommandBuilder()
@@ -41,7 +48,7 @@ module.exports = {
         // Check if the initial block is greater than the current block + 2
         let lastBlock;
         try {
-            lastBlock = await getLastBlock();
+            lastBlock = parseInt((await getLastBlockAndHash()).height);
             if (bloqueInicial < lastBlock + 2) {
                 await interaction.reply({
                     content: `El bloque inicial debe ser mayor al bloque actual + 2.\nBloque actual: ${lastBlock}`,
@@ -58,6 +65,7 @@ module.exports = {
             return;
         }
 
+        //-------------------------------------------------- Create thread --------------------------------------------------///
         // Send the initial message
         let nextMassacre = bloqueInicial;
         const initialMessage = await interaction.reply({
@@ -86,9 +94,10 @@ module.exports = {
             console.error(error);
         }
 
+        //-------------------------------------------------- Listen for new bets --------------------------------------------------///
         // Listen for new messages in the thread
         const client = interaction.client;
-        const players = {};
+        let players = {};
 
         // To use to look ranking
         function generatePlayersContent() {
@@ -96,11 +105,11 @@ module.exports = {
                 return 'No hay apuestas todavía';
 
             let contenido = '**Apostantes y apuestas:**\n';
-            for (const userId in players) {
-                const user = client.users.cache.get(userId);
+            for (const playerId in players) {
+                const user = client.users.cache.get(playerId);
                 contenido += `- ${user.toString()}: ${
-                    players[userId]
-                } sats <:sats:1156332987080777788>\n`;
+                    players[playerId]
+                } sats <:sats:1156332987080777788>\n`; // La Crypta: :sats:1156332987080777788, Testnet: :sats:1222003895434477639
             }
             return contenido;
         }
@@ -113,9 +122,8 @@ module.exports = {
             if (message.author.id !== zapBot.id) return; // Ignore messages than are not from the zap-bot
 
             const usuarioPozo = interaction.options.getUser('usuario-pozo');
-            const reciverId = message.content
-                .match(/<@(\d+)>/g)[1]
-                .slice(2, -1);
+            const match = message.content.match(/<@(\d+)>/g);
+            const reciverId = match ? match[1].slice(2, -1) : null;
             if (usuarioPozo.id !== reciverId) return; // Ignore zaps to other users than the usuario-pozo
 
             const sender = message.mentions.users.first();
@@ -123,15 +131,16 @@ module.exports = {
                 message.content.match(/envió (\d+) satoshis/)[1]
             );
 
-            // Check if player already exists and if first massacre happends
-            if (!players[sender.id] && lastBlock < bloqueInicial) {
+            // Find the player in the players object
+            if (
+                !players.hasOwnProperty(sender.id) &&
+                lastBlock < bloqueInicial
+            ) {
+                // If player not found and it's before the first massacre, add new player
                 players[sender.id] = amount;
 
-                updateMessage();
-                updateBiders = true;
-
+                // Send a message to the thread when a new bet is received
                 thread.send({
-                    // Send a message to the thread when a new bet is received
                     content:
                         `**Nueva apuesta recibida** :money_mouth:\n` +
                         `de: **${sender.toString()}**\n` +
@@ -142,14 +151,12 @@ module.exports = {
                         `de: ${sender.displayName}\n` +
                         `por: ${amount} sats`
                 );
-            } else if (players[sender.id]) {
+            } else if (players.hasOwnProperty(sender.id)) {
+                // If player found, update player's amount
                 players[sender.id] += amount;
 
-                updateMessage();
-                updateBiders = true;
-
+                // Send a message to the thread when a new bet is received
                 thread.send({
-                    // Send a message to the thread when a new bet is received
                     content:
                         `**Nueva apuesta recibida** :money_mouth:\n` +
                         `de: **${sender.toString()}**\n` +
@@ -161,7 +168,7 @@ module.exports = {
                         `por: ${amount} sats`
                 );
             } else {
-                // Send a message to the thread when a new bet is received after the first massacre
+                // If it's after the first massacre, don't accept new bets
                 thread.send({
                     content:
                         `${sender.toString()} no se aceptan más apuestas :no_entry_sign:\n` +
@@ -169,12 +176,18 @@ module.exports = {
                 });
                 console.log('Don´t accept more bets');
             }
+
+            // Update and notify
+            console.log('palyerss: ', players);
+            updateBiders = true;
+            updateMessage();
         });
 
+        //-------------------------------------------------- Update the message --------------------------------------------------///
         // Update the message every 10 seconds and notify massacre
         async function updateMessage() {
             let oldLastBlock = lastBlock;
-            lastBlock = await getLastBlock();
+            lastBlock = parseInt((await getLastBlockAndHash()).height);
 
             // Check if the last block has changed and if the next massacre has not been reached
             if (
@@ -206,6 +219,39 @@ module.exports = {
             }
             // Check if the next massacre has been reached
             else if (lastBlock === nextMassacre) {
+                const playerIds = Object.keys(players);
+
+                if (playerIds.length === 0) {
+                    await thread.send({
+                        content:
+                            'No hay apuestas, no se puede hacer la masacre :no_entry_sign:'
+                    });
+                    console.log('No havent bets, can´t make the massacre');
+                    try {
+                        clearInterval(updateMessageInterval);
+                        await thread.setLocked(true);
+                    } catch (error) {
+                        console.error(error);
+                    }
+                    return;
+                } else if (playerIds.length === 1) {
+                    const user = client.users.cache.get(playerIds[0]);
+                    await thread.send({
+                        content:
+                            `# :trophy: **${user.toString()}** es el ganador de la masacre :trophy:\n` +
+                            `con **${
+                                players[playerIds[0]]
+                            } sats** <:sats:1156332987080777788>`
+                    });
+                    try {
+                        clearInterval(updateMessageInterval);
+                        // await thread.setLocked(true);
+                    } catch (error) {
+                        console.error(error);
+                    }
+                    return;
+                }
+
                 nextMassacre += intervalo;
 
                 await interaction.editReply({
@@ -224,11 +270,47 @@ module.exports = {
 
                 await thread.send({
                     // message wiht @everyone to notify the massacre
-                    content: `¡¡¡MASSACRE!!! :boom: :boom: :boom:\n||@everyone||`
+                    content: `# :boom: :boom: ¡¡¡MASSACRE!!! :boom: :boom:\n||@everyone||`
                 });
+
+                // Make the massacre
+                const blockHash = (await getLastBlockAndHash()).hash.toString();
+                players = halve(blockHash, players);
+
+                if (playerIds.length === 1) {
+                    const user = client.users.cache.get(playerIds[0]);
+                    await thread.send({
+                        content:
+                            `# :trophy: **${user.toString()}** es el ganador de la masacre :trophy:\n` +
+                            `con **${
+                                players[playerIds[0]]
+                            } sats** <:sats:1156332987080777788>`
+                    });
+                    try {
+                        clearInterval(updateMessageInterval);
+                        // await thread.setLocked(true);
+                    } catch (error) {
+                        console.error(error);
+                    }
+                } else {
+                    // Print players ranking
+                    let contenido = '**Ranking de la masacre:**\n';
+                    for (const playerId of playerIds) {
+                        const user = client.users.cache.get(playerId);
+                        contenido += `- ${user.toString()}: ${
+                            players[playerId]
+                        } sats <:sats:1156332987080777788>\n`;
+                    }
+                    await thread.send({
+                        content: contenido
+                    });
+                }
+
+                updateBiders = true;
+                updateMessage();
             }
         }
 
-        setInterval(updateMessage, 10000);
+        const updateMessageInterval = setInterval(updateMessage, 10000); // If not make new bets, update every 10 seconds
     }
 };
