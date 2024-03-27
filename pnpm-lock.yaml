@@ -5,6 +5,9 @@ settings:
   excludeLinksFromLockfile: false
 
 dependencies:
+  '@discordjs/builders':
+    specifier: ^1.7.0
+    version: 1.7.0
   '@mempool/mempool.js':
     specifier: ^2.3.0
     version: 2.3.0
