@@ -1,13 +1,22 @@
 /**
  * TODO:
- * - add closing bets when next massacre - 2 blocks remain and notify the players
- * - Fix int for float amount
+ * - [x] Add closing bets when next massacre - 2 blocks remain and notify the players (Unncomment line 52)
+ * - [x] Unncomment line 171
+ * - [x] Fix int for float amount
+ * - [x] Fix message reply
+ * - [x] Pozo total
+ * - [x] Instrucciones de uso a que bot mando
+ * - [x] Avisar que no se puede apostar mas mensaje
+ * - [x] bug: Personas eliminadas pueden seguir apostando
+ * - [x] feature: numero de bloque en el que sucede la masacre
+ * - [x] bug: despues de la masacre envia el mensaje de supervivientes e info
+ * - [ ] feature: Marcador de mitad de tabla
  */
 
-const { SlashCommandBuilder } = require('@discordjs/builders');
+const { SlashCommandBuilder } = require('discord.js');
 const { ChannelType } = require('discord.js');
 const { getLastBlockAndHash } = require('../../services/mempool.js');
-const { halve } = require('./lottery.js');
+const { halve } = require('../../helpers/halvingMasscare/lottery.js');
 
 module.exports = {
     data: new SlashCommandBuilder()
@@ -42,16 +51,28 @@ module.exports = {
                 .setRequired(true)
         ),
     async execute(interaction) {
+        closedBets = false;
         const intervalo = interaction.options.getNumber('intervalo');
         const bloqueInicial = interaction.options.getNumber('bloque-inicial');
+        let count = 0;
 
+        // Check if the interval is greater than 2
+        if (intervalo < 2) {
+            await interaction.reply({
+                content: `El intervalo debe ser mayor o igual a 2 bloques.`,
+                ephemeral: true
+            });
+            return;
+        }
         // Check if the initial block is greater than the current block + 2
         let lastBlock;
         try {
             lastBlock = parseInt((await getLastBlockAndHash()).height);
-            if (bloqueInicial < lastBlock + 2) {
+            if (bloqueInicial <= lastBlock + 2) {
                 await interaction.reply({
-                    content: `El bloque inicial debe ser mayor al bloque actual + 2.\nBloque actual: ${lastBlock}`,
+                    content: `El bloque inicial debe ser mayor al bloque actual + 2 (Intentá con **${
+                        lastBlock + 3
+                    }**).\nBloque actual: ${lastBlock}`,
                     ephemeral: true
                 });
                 return;
@@ -71,13 +92,14 @@ module.exports = {
         const initialMessage = await interaction.reply({
             content:
                 '# Nuevo Halving Massacre iniciado! <:guevitos:1217916631834169465>' +
-                `\n- :checkered_flag: Bloque inicial: **${bloqueInicial}**` +
-                `\n- :skull_crossbones: Se masacra cada: **${intervalo}** bloques` +
                 `\n- :alarm_clock: Bloque actual: **${lastBlock}**` +
-                `\n- :boom: Masacre inicial en: **${
-                    nextMassacre - lastBlock
-                }** bloques` +
-                '\n\nHagan sus apuestas! :money_with_wings: :point_down:',
+                `\n- :skull_crossbones: Se masacra cada: **${intervalo}** bloques` +
+                `\n- :checkered_flag: Masacre inicial en bloque: **${bloqueInicial}**` +
+                '\n\n**Hagan sus apuestas!** :money_with_wings: :point_down:' +
+                `\n*Enviá satoshis a ${interaction.options
+                    .getUser('usuario-pozo')
+                    .toString()} *` +
+                ` [.](https://image.nostr.build/cf14a2dd5ed7aab9b316d8e2a2eec7aee01175f904528b17e098801375cbba83.png)`,
             fetchReply: true
         });
 
@@ -91,6 +113,7 @@ module.exports = {
 
             await thread.join();
         } catch (error) {
+            console.log('Error creating thread');
             console.error(error);
         }
 
@@ -104,17 +127,44 @@ module.exports = {
             if (Object.keys(players).length === 0)
                 return 'No hay apuestas todavía';
 
-            let contenido = '**Apostantes y apuestas:**\n';
-            for (const playerId in players) {
+            let lastString =
+                nextMassacre === bloqueInicial
+                    ? `\n- :checkered_flag:  Massacre inicial en: **${
+                          bloqueInicial - lastBlock
+                      }** bloques (${bloqueInicial})` +
+                      '\n\nHagan sus apuestas! :money_with_wings: :point_down:'
+                    : `\n- :boom: Próxima massacre en: **${
+                          nextMassacre - lastBlock
+                      }** bloques (${nextMassacre})` +
+                      '\n\nHagan sus re-apuestas! :money_with_wings: :point_down:';
+
+            let contenido =
+                `# Info\n` +
+                `\n- :alarm_clock: Bloque actual: **${lastBlock}**` +
+                `\n- :skull_crossbones: Se masacra cada: **${intervalo}** bloques` +
+                lastString;
+
+            contenido += '\n\n**Ranking:**\n';
+            // Sort players by amount desc
+            const playersArray = Object.entries(players);
+            playersArray.sort((a, b) => b[1] - a[1]);
+            for (const [playerId, amount] of playersArray) {
                 const user = client.users.cache.get(playerId);
-                contenido += `- ${user.toString()}: ${
-                    players[playerId]
-                } sats <:sats:1156332987080777788>\n`; // La Crypta: :sats:1156332987080777788, Testnet: :sats:1222003895434477639
+                contenido += `- ${user.toString()}: ${amount} sats <:sats:1222003895434477639>\n`; // La Crypta: :sats:1156332987080777788, Testnet: :sats:1222003895434477639
             }
+
+            // total sats
+            let totalSats = 0;
+            for (const playerId in players) {
+                totalSats += players[playerId];
+            }
+            contenido += `\n**## Total en el pozo:** ${totalSats} sats <:sats:1222003895434477639>`;
+
             return contenido;
         }
 
         let updateBiders = false;
+
         client.on('messageCreate', async (message) => {
             if (message.channel.id !== thread.id) return; // Ignore messages from other channels
 
@@ -127,12 +177,27 @@ module.exports = {
             if (usuarioPozo.id !== reciverId) return; // Ignore zaps to other users than the usuario-pozo
 
             const sender = message.mentions.users.first();
-            const amount = parseInt(
+            const amount = parseFloat(
                 message.content.match(/envió (\d+) satoshis/)[1]
             );
 
-            // Find the player in the players object
-            if (
+            console.log(
+                'nextMassacre: ',
+                nextMassacre,
+                'lastBlock: ',
+                lastBlock
+            );
+
+            // Find the player in the players object and add to the list if first massacre doesn't happen
+            if (closedBets) {
+                // If it's after the first massacre, don't accept new bets
+                thread.send({
+                    content:
+                        `${sender.toString()} no se aceptan más apuestas :no_entry_sign:\n` +
+                        `tus satoshis quedaron en el pozo :hole:\n`
+                });
+                console.log('Don´t accept more bets');
+            } else if (
                 !players.hasOwnProperty(sender.id) &&
                 lastBlock < bloqueInicial
             ) {
@@ -144,13 +209,14 @@ module.exports = {
                     content:
                         `**Nueva apuesta recibida** :money_mouth:\n` +
                         `de: **${sender.toString()}**\n` +
-                        `por: **${amount} sats** <:sats:1156332987080777788>`
+                        `por: **${amount} sats** <:sats:1222003895434477639>`
                 });
                 console.log(
                     'Nueva apuesta recibida\n' +
                         `de: ${sender.displayName}\n` +
                         `por: ${amount} sats`
                 );
+                updateBiders = true;
             } else if (players.hasOwnProperty(sender.id)) {
                 // If player found, update player's amount
                 players[sender.id] += amount;
@@ -160,71 +226,97 @@ module.exports = {
                     content:
                         `**Nueva apuesta recibida** :money_mouth:\n` +
                         `de: **${sender.toString()}**\n` +
-                        `por: **${amount} sats** <:sats:1156332987080777788>`
+                        `por: **${amount} sats** <:sats:1222003895434477639>`
                 });
                 console.log(
                     'Nueva apuesta recibida\n' +
                         `de: ${sender.displayName}\n` +
                         `por: ${amount} sats`
                 );
-            } else {
-                // If it's after the first massacre, don't accept new bets
+                updateBiders = true;
+            } else if (
+                !players.hasOwnProperty(sender.id) &&
+                lastBlock > bloqueInicial
+            ) {
                 thread.send({
                     content:
-                        `${sender.toString()} no se aceptan más apuestas :no_entry_sign:\n` +
-                        `tus satoshis quedaron en el limbo :hole:\n`
+                        `${sender.toString()} no ingresaste en la primera ronda del juego\n` +
+                        `tus satoshis quedaron en el pozo :hole:\n`
                 });
-                console.log('Don´t accept more bets');
             }
 
             // Update and notify
             console.log('palyerss: ', players);
-            updateBiders = true;
             updateMessage();
         });
 
-        //-------------------------------------------------- Update the message --------------------------------------------------///
+        //-------------------------------------------------- Send new the message --------------------------------------------------///
         // Update the message every 10 seconds and notify massacre
         async function updateMessage() {
             let oldLastBlock = lastBlock;
             lastBlock = parseInt((await getLastBlockAndHash()).height);
 
+            // Close bets when next massacre - 2 blocks remain
+            console.log(`${count} closedBets: `, closedBets);
+            if (!closedBets && lastBlock >= nextMassacre - 2) {
+                closedBets = true;
+                await thread.send({
+                    content: '# APUESTAS CERRADAS :no_entry_sign:\n'
+                });
+                return;
+            } else if (
+                count >= 12 &&
+                closedBets &&
+                lastBlock >= nextMassacre - 2
+            ) {
+                count = 0;
+                await thread.send({
+                    content:
+                        '# FREEZADO :snowflake:\nEl bloque actual es: **' +
+                        lastBlock +
+                        '**\n'
+                });
+            }
             // Check if the last block has changed and if the next massacre has not been reached
             if (
+                count >= 12 ||
                 (oldLastBlock !== lastBlock && lastBlock !== nextMassacre) ||
                 updateBiders
             ) {
+                count = 0;
                 updateBiders = false;
 
-                let lastString =
-                    nextMassacre === bloqueInicial
-                        ? `\n- :boom: Masacre inicial en: **${
-                              nextMassacre - lastBlock
-                          }** bloques` +
-                          '\n\nHagan sus apuestas! :money_with_wings: :point_down:'
-                        : `\n- :boom: Próxima masacre en: **${
-                              nextMassacre - lastBlock
-                          }** bloques` +
-                          '\n\nHagan sus re-apuestas! :money_with_wings: :point_down:';
-                await interaction.editReply({
-                    content:
-                        '# Nuevo Halving Massacre iniciado! <:guevitos:1217916631834169465>' +
-                        `\n- :checkered_flag: Bloque inicial: **${bloqueInicial}**` +
-                        `\n- :skull_crossbones: Se masacra cada: **${intervalo}** bloques` +
-                        `\n- :alarm_clock: Bloque actual: **${lastBlock}**` +
-                        lastString +
-                        '\n\n' +
-                        generatePlayersContent()
+                await thread.send({
+                    content: generatePlayersContent()
                 });
             }
             // Check if the next massacre has been reached
             else if (lastBlock === nextMassacre) {
-                const playerIds = Object.keys(players);
+                async function playerWin() {
+                    const user = client.users.cache.get(playerIds[0]);
+                    await thread.send({
+                        content:
+                            `# :trophy: **${user.toString()}** es el ganador de la massacre :trophy:\n` +
+                            `## con **${
+                                players[playerIds[0]]
+                            } sats** <:sats:1222003895434477639>` +
+                            ` [.](https://giphy.com/gifs/win-argument-3rUbeDiLFMtAOIBErf)`
+                    });
+                    try {
+                        clearInterval(updateMessageInterval);
+                        // await thread.setLocked(true);
+                    } catch (error) {
+                        console.error(error);
+                    }
+                }
 
+                // Test if are 1 or 0 players
+                let playerIds = Object.keys(players);
                 if (playerIds.length === 0) {
                     await thread.send({
                         content:
-                            'No hay apuestas, no se puede hacer la masacre :no_entry_sign:'
+                            'No hay apuestas, no se puede hacer la massacre :no_entry_sign:' +
+                            '[.](https://tenor.com/view/pigeon-sad-paloma-triste-gif-20654343)'
                     });
                     console.log('No havent bets, can´t make the massacre');
                     try {
@@ -235,80 +327,39 @@ module.exports = {
                     }
                     return;
                 } else if (playerIds.length === 1) {
-                    const user = client.users.cache.get(playerIds[0]);
-                    await thread.send({
-                        content:
-                            `# :trophy: **${user.toString()}** es el ganador de la masacre :trophy:\n` +
-                            `con **${
-                                players[playerIds[0]]
-                            } sats** <:sats:1156332987080777788>`
-                    });
-                    try {
-                        clearInterval(updateMessageInterval);
-                        // await thread.setLocked(true);
-                    } catch (error) {
-                        console.error(error);
-                    }
+                    await playerWin();
                     return;
                 }
 
                 nextMassacre += intervalo;
 
-                await interaction.editReply({
-                    content:
-                        '# Nuevo Halving Massacre iniciado! <:guevitos:1217916631834169465>' +
-                        `\n- :checkered_flag: Bloque inicial: **${bloqueInicial}**` +
-                        `\n- :skull_crossbones: Se masacra cada: **${intervalo}** bloques` +
-                        `\n- :alarm_clock: Bloque actual: **${lastBlock}**` +
-                        `\n- :boom: Próxima masacre: **${
-                            nextMassacre - lastBlock
-                        }** bloques` +
-                        '\n\nHagan sus re-apuestas! :money_with_wings: :point_down:' +
-                        '\n\n' +
-                        generatePlayersContent()
-                });
-
-                await thread.send({
-                    // message wiht @everyone to notify the massacre
-                    content: `# :boom: :boom: ¡¡¡MASSACRE!!! :boom: :boom:\n||@everyone||`
-                });
-
                 // Make the massacre
                 const blockHash = (await getLastBlockAndHash()).hash.toString();
                 players = halve(blockHash, players);
+                playerIds = Object.keys(players);
+
+                await thread.send({
+                    // message wiht @everyone to notify the massacre
+                    content:
+                        `# :boom: :boom: ¡¡¡MASSACRE!!! :boom: :boom:\n` +
+                        `|| @everyone ||` +
+                        ` [.](https://giphy.com/gifs/SignatureEntertainmentUK-war-movie-wolves-of-wolvesofwar-Uxv3xZTNmwKQkWTpUd)`
+                });
 
                 if (playerIds.length === 1) {
-                    const user = client.users.cache.get(playerIds[0]);
-                    await thread.send({
-                        content:
-                            `# :trophy: **${user.toString()}** es el ganador de la masacre :trophy:\n` +
-                            `con **${
-                                players[playerIds[0]]
-                            } sats** <:sats:1156332987080777788>`
-                    });
-                    try {
-                        clearInterval(updateMessageInterval);
-                        // await thread.setLocked(true);
-                    } catch (error) {
-                        console.error(error);
-                    }
+                    await playerWin();
+                    return;
                 } else {
                     // Print players ranking
-                    let contenido = '**Ranking de la masacre:**\n';
-                    for (const playerId of playerIds) {
-                        const user = client.users.cache.get(playerId);
-                        contenido += `- ${user.toString()}: ${
-                            players[playerId]
-                        } sats <:sats:1156332987080777788>\n`;
-                    }
                     await thread.send({
-                        content: contenido
+                        content: '# Supervivientes\n' + generatePlayersContent()
                     });
                 }
 
+                closedBets = false;
                 updateBiders = true;
-                updateMessage();
             }
+            count++;
         }
 
         const updateMessageInterval = setInterval(updateMessage, 10000); // If not make new bets, update every 10 seconds
